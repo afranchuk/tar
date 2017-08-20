@@ -47,6 +47,7 @@ data FormatError
   | NotTarFormat
   | UnrecognisedTarFormat
   | HeaderBadNumericEncoding
+  | BadExtendedHeader
 #if MIN_VERSION_base(4,8,0)
   deriving (Eq, Show, Typeable)
 
@@ -59,6 +60,7 @@ instance Exception FormatError where
   displayException NotTarFormat             = "data is not in tar format"
   displayException UnrecognisedTarFormat    = "tar entry not in a recognised format"
   displayException HeaderBadNumericEncoding = "tar header is malformed (bad numeric encoding)"
+  displayException BadExtendedHeader        = "bad pax extension header"
 #else
   deriving (Eq, Typeable)
 
@@ -71,6 +73,7 @@ instance Show FormatError where
   show NotTarFormat             = "data is not in tar format"
   show UnrecognisedTarFormat    = "tar entry not in a recognised format"
   show HeaderBadNumericEncoding = "tar header is malformed (bad numeric encoding)"
+  show BadExtendedHeader        = "bad pax extension header"
 
 instance Exception FormatError
 #endif
@@ -118,7 +121,11 @@ getEntry bs
       padding = (512 - size) `mod` 512
       bs'     = LBS.drop (512 + size + padding) bs
 
-      entry = Entry {
+  exthdr <- if typecode == 'g' || typecode == 'x'
+            then getExtendedHeader (LBS.toStrict content)
+            else pure []
+
+  let entry = Entry {
         entryTarPath     = TarPath name prefix,
         entryContent     = case typecode of
                    '\0' -> NormalFile      content size
@@ -132,6 +139,8 @@ getEntry bs
                    '5'  -> Directory
                    '6'  -> NamedPipe
                    '7'  -> NormalFile      content size
+                   'g'  -> GlobalExtendedHeader exthdr
+                   'x'  -> ExtendedHeader exthdr
                    _    -> OtherEntryType  typecode content size,
         entryPermissions = mode,
         entryOwnership   = Ownership (BS.Char8.unpack uname)
@@ -190,6 +199,44 @@ correctChecksum header checksum = checksum == checksum'
               + sumchars (BS.drop 156 header)
 
 -- * TAR format primitive input
+
+getExtendedHeader :: BS.ByteString -> Partial FormatError ExtendedHeader
+getExtendedHeader content =
+  foldExtendedHeaderEntries toExtendedHeaders [] content
+  where
+    toExtendedHeaders hdrs name val =
+      pure (ExtendedHeaderEntry name val : hdrs)
+
+foldExtendedHeaderEntries
+  :: (a -> BS.ByteString -> BS.ByteString -> Partial FormatError a)
+  -> a
+  -> BS.ByteString
+  -> Partial FormatError a
+foldExtendedHeaderEntries f = go
+  where
+    go z s | BS.null s || BS.Char8.head s == '\NUL' = return z
+    go z s =
+      let
+        (decSize, rest0) = BS.Char8.span (\c -> c /= '\NUL' && c /= ' ') s
+      in do
+        case readDec decSize of
+          Just entrySize
+            | size <= 0 && BS.length rest0 < size -> Error BadExtendedHeader
+            | otherwise ->
+              let
+                (kv,  rest1)   = BS.splitAt size rest0
+                (key', value') = BS.Char8.span (\c ->c /= '\NUL' && c /= '=') kv
+                key            = BS.Char8.dropWhile (\c -> c == ' ') key'
+                value          = BS.Char8.dropWhile (\c -> c == '=') value'
+              in if not (BS.null key) &&
+                    not (BS.null value) &&
+                    BS.Char8.last value == '\n'
+                  then do z' <- f z key (BS.Char8.init value)
+                          go z' rest1
+                  else Error BadExtendedHeader
+            where
+              size = entrySize - BS.length decSize
+          Nothing -> Error HeaderBadNumericEncoding
 
 {-# SPECIALISE getOct :: Int -> Int -> BS.ByteString -> Partial FormatError Int   #-}
 {-# SPECIALISE getOct :: Int -> Int -> BS.ByteString -> Partial FormatError Int64 #-}
@@ -255,6 +302,23 @@ instance Monad (Partial e) where
 #if !MIN_VERSION_base(4,13,0)
     fail          = error "fail @(Partial e)"
 #endif
+
+{-# SPECIALISE readOct :: BS.ByteString -> Maybe Int   #-}
+readDec :: Integral n => BS.ByteString -> Maybe n
+readDec bs0 = case go 0 0 bs0 of
+                -1 -> Nothing
+                n  -> Just n
+  where
+    go :: Integral n => Int -> n -> BS.ByteString -> n
+    go !i !n !bs
+      | BS.null bs = if i == 0 then -1 else n
+      | otherwise  =
+          case BS.unsafeHead bs of
+            w | w >= 0x30
+             && w <= 0x39 -> go (i+1)
+                                (n * 10 + (fromIntegral w - 0x30))
+                                (BS.unsafeTail bs)
+              | otherwise -> -1
 
 {-# SPECIALISE readOct :: BS.ByteString -> Maybe Int   #-}
 {-# SPECIALISE readOct :: BS.ByteString -> Maybe Int64 #-}

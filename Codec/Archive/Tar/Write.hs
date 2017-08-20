@@ -35,6 +35,16 @@ write es = LBS.concat $ map putEntry es ++ [LBS.replicate (512*2) 0]
 
 putEntry :: Entry -> LBS.ByteString
 putEntry entry = case entryContent entry of
+  GlobalExtendedHeader entries  ->
+    let
+      content = putExtendedHeader entries
+      size    = LBS.length content
+    in putEntry entry { entryContent = OtherEntryType 'g' content size }
+  ExtendedHeader entries        ->
+    let
+      content = putExtendedHeader entries
+      size    = LBS.length content
+    in putEntry entry { entryContent = OtherEntryType 'x' content size }
   NormalFile       content size -> LBS.concat [ header, content, padding size ]
   OtherEntryType _ content size -> LBS.concat [ header, content, padding size ]
   _                             -> header
@@ -42,6 +52,18 @@ putEntry entry = case entryContent entry of
     header       = putHeader entry
     padding size = LBS.replicate paddingSize 0
       where paddingSize = fromIntegral (negate size `mod` 512)
+
+putExtendedHeader :: ExtendedHeader -> LBS.ByteString
+putExtendedHeader entries = content
+  where
+    content =
+      LBS.concat (concat [ [ LBS.fromStrict keyword
+                           , LBS.Char8.pack "="
+                           , LBS.fromStrict value
+                           , LBS.Char8.pack "\n"
+                           ]
+                         | ExtendedHeaderEntry keyword value <- entries
+                         ])
 
 putHeader :: Entry -> LBS.ByteString
 putHeader entry =
@@ -101,6 +123,9 @@ putHeaderNoChkSum Entry {
     (typeCode, contentSize, linkTarget,
      deviceMajor, deviceMinor) = case content of
        NormalFile      _ size            -> ('0' , size, mempty, 0,     0)
+       -- extended headers are handled separately
+       ExtendedHeader  _                 -> ('x' , 0,    mempty, 0,     0)
+       GlobalExtendedHeader _            -> ('g' , 0,    mempty, 0,     0)
        Directory                         -> ('5' , 0,    mempty, 0,     0)
        SymbolicLink    (LinkTarget link) -> ('2' , 0,    link,   0,     0)
        HardLink        (LinkTarget link) -> ('1' , 0,    link,   0,     0)

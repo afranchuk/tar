@@ -93,6 +93,7 @@ detailedInfo entry =
       Tar.BlockDevice     _ _ -> 'b'
       Tar.Directory           -> 'd'
       Tar.NamedPipe           -> 'p'
+      Tar.ExtendedHeader  _   -> 'g'
       _                       -> '-'
     permissions = concat [userPerms, groupPerms, otherPerms]
       where
