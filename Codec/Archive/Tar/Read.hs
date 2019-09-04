@@ -29,6 +29,7 @@ import qualified Data.ByteString        as BS
 import qualified Data.ByteString.Char8  as BS.Char8
 import qualified Data.ByteString.Unsafe as BS
 import qualified Data.ByteString.Lazy   as LBS
+import qualified Data.Map.Strict        as Map
 
 import Prelude hiding (read)
 
@@ -123,7 +124,7 @@ getEntry bs
 
   exthdr <- if typecode == 'g' || typecode == 'x'
             then getExtendedHeader (LBS.toStrict content)
-            else pure []
+            else pure mempty
 
   let entry = Entry {
         entryTarPath     = TarPath name prefix,
@@ -140,7 +141,9 @@ getEntry bs
                    '6'  -> NamedPipe
                    '7'  -> NormalFile      content size
                    'g'  -> GlobalExtendedHeader exthdr
-                   'x'  -> ExtendedHeader exthdr
+                   'x'  -> LocalExtendedHeader exthdr
+                   'L'  -> LocalExtendedHeader mempty { extendedHeaderPath = Just $ LBS.toStrict content }
+                   'K'  -> LocalExtendedHeader mempty { extendedHeaderLinkPath = Just $ LBS.toStrict content }
                    _    -> OtherEntryType  typecode content size,
         entryPermissions = mode,
         entryOwnership   = Ownership (BS.Char8.unpack uname)
@@ -202,10 +205,10 @@ correctChecksum header checksum = checksum == checksum'
 
 getExtendedHeader :: BS.ByteString -> Partial FormatError ExtendedHeader
 getExtendedHeader content =
-  foldExtendedHeaderEntries toExtendedHeaders [] content
+  pairsToExtendedHeader <$> foldExtendedHeaderEntries toExtendedHeaders [] content
   where
     toExtendedHeaders hdrs name val =
-      pure (ExtendedHeaderEntry name val : hdrs)
+      pure $ (name,val) : hdrs
 
 foldExtendedHeaderEntries
   :: (a -> BS.ByteString -> BS.ByteString -> Partial FormatError a)
@@ -303,7 +306,7 @@ instance Monad (Partial e) where
     fail          = error "fail @(Partial e)"
 #endif
 
-{-# SPECIALISE readOct :: BS.ByteString -> Maybe Int   #-}
+{-# SPECIALISE readDec :: BS.ByteString -> Maybe Int   #-}
 readDec :: Integral n => BS.ByteString -> Maybe n
 readDec bs0 = case go 0 0 bs0 of
                 -1 -> Nothing

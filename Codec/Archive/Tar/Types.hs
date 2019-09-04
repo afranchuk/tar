@@ -55,8 +55,9 @@ module Codec.Archive.Tar.Types (
   foldlEntries,
   unfoldEntries,
 
-  ExtendedHeader,
-  ExtendedHeaderEntry(..)
+  ExtendedHeader(..),
+  pairsToExtendedHeader,
+  extendedHeaderToPairs,
 
 #ifdef TESTS
   limitToV7FormatCompat
@@ -64,11 +65,14 @@ module Codec.Archive.Tar.Types (
   ) where
 
 import Data.Int      (Int64)
+import Data.Map.Strict (Map)
+import qualified Data.Map.Strict as Map
 import Data.Monoid   (Monoid(..))
 import Data.Semigroup as Sem
 import qualified Data.ByteString       as BS
 import qualified Data.ByteString.Char8 as BS.Char8
 import qualified Data.ByteString.Lazy  as LBS
+import Control.Applicative ((<|>))
 import Control.DeepSeq
 
 import qualified System.FilePath as FilePath.Native
@@ -132,7 +136,7 @@ entryPath = fromTarPath . entryTarPath
 -- Portable archives should contain only 'NormalFile' and 'Directory'.
 --
 data EntryContent = NormalFile      LBS.ByteString {-# UNPACK #-} !FileSize
-                  | ExtendedHeader  !ExtendedHeader
+                  | LocalExtendedHeader  !ExtendedHeader
                   | GlobalExtendedHeader !ExtendedHeader
                   | Directory
                   | SymbolicLink    !LinkTarget
@@ -146,11 +150,45 @@ data EntryContent = NormalFile      LBS.ByteString {-# UNPACK #-} !FileSize
                                     {-# UNPACK #-} !FileSize
     deriving (Eq, Ord, Show)
 
-data ExtendedHeaderEntry = ExtendedHeaderEntry {-# UNPACK #-} !BS.ByteString
-                                               {-# UNPACK #-} !BS.ByteString
+data ExtendedHeader = ExtendedHeader {
+    -- | The link path of the following entry(s).
+    extendedHeaderLinkPath :: Maybe BS.ByteString,
+
+    -- | The path of the following entry(s).
+    extendedHeaderPath :: Maybe BS.ByteString,
+
+    -- | Other extended header entries.
+    extendedHeaderOther :: Map BS.ByteString BS.ByteString
+  }
     deriving (Eq, Ord, Show)
 
-type ExtendedHeader = [ExtendedHeaderEntry]
+instance Sem.Semigroup ExtendedHeader where
+  a <> b = ExtendedHeader {
+      extendedHeaderLinkPath = extendedHeaderLinkPath b <|> extendedHeaderLinkPath a,
+      extendedHeaderPath = extendedHeaderPath b <|> extendedHeaderPath a,
+      extendedHeaderOther = Map.union (extendedHeaderOther b) (extendedHeaderOther a)
+    }
+
+instance Monoid ExtendedHeader where
+  mempty = ExtendedHeader {
+      extendedHeaderLinkPath = Nothing,
+      extendedHeaderPath = Nothing,
+      extendedHeaderOther = mempty
+    }
+    
+extendedHeaderToPairs :: ExtendedHeader -> [(BS.ByteString,BS.ByteString)]
+extendedHeaderToPairs eh = maybe [] (\v -> [(BS.Char8.pack "linkpath",v)]) (extendedHeaderLinkPath eh)
+  ++ maybe [] (\v -> [(BS.Char8.pack "path",v)]) (extendedHeaderPath eh)
+  ++ Map.toList (extendedHeaderOther eh)
+
+pairsToExtendedHeader :: [(BS.ByteString,BS.ByteString)] -> ExtendedHeader
+pairsToExtendedHeader = foldr addEntry mempty . reverse
+  where
+    addEntry :: (BS.ByteString,BS.ByteString) -> ExtendedHeader -> ExtendedHeader
+    addEntry (k,v) eh = if k == BS.Char8.pack "linkpath" then eh { extendedHeaderLinkPath = Just v }
+      else if k == BS.Char8.pack "path" then eh { extendedHeaderPath = Just v }
+      else eh { extendedHeaderOther = Map.insert k v (extendedHeaderOther eh) }
+    
 
 data Ownership = Ownership {
     -- | The owner user name. Should be set to @\"\"@ if unknown.
@@ -188,6 +226,10 @@ data Format =
      -- archives the standard USTAR/POSIX should be used.
      --
    | GnuFormat
+
+     -- | The pax (POSIX) tar format adds an extended header field to the USTAR
+     -- format.
+   | PaxFormat
   deriving (Eq, Ord, Show)
 
 instance NFData Entry where
@@ -680,7 +722,7 @@ instance Arbitrary Ownership where
     | (oname', gname', oid', gid') <- shrink (oname, gname, oid, gid) ]
 
 instance Arbitrary Format where
-  arbitrary = elements [V7Format, UstarFormat, GnuFormat]
+  arbitrary = elements [V7Format, UstarFormat, GnuFormat, PaxFormat]
 
 
 --arbitraryOctal :: (Integral n, Random n) => Int -> Gen n

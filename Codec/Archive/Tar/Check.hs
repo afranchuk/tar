@@ -243,6 +243,7 @@ instance Show PortabilityError where
     where fmt = case format of V7Format    -> "old Unix V7 tar"
                                UstarFormat -> "ustar" -- I never generate this but a user might
                                GnuFormat   -> "GNU tar"
+                               PaxFormat   -> "pax"
   show NonPortableFileType        = "Non-portable file type in archive"
   show (NonPortableEntryNameChar posixPath)
     = "Non-portable character in archive entry name: " ++ show posixPath

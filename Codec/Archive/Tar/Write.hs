@@ -40,7 +40,7 @@ putEntry entry = case entryContent entry of
       content = putExtendedHeader entries
       size    = LBS.length content
     in putEntry entry { entryContent = OtherEntryType 'g' content size }
-  ExtendedHeader entries        ->
+  LocalExtendedHeader entries   ->
     let
       content = putExtendedHeader entries
       size    = LBS.length content
@@ -62,7 +62,7 @@ putExtendedHeader entries = content
                            , LBS.fromStrict value
                            , LBS.Char8.pack "\n"
                            ]
-                         | ExtendedHeaderEntry keyword value <- entries
+                         | (keyword,value) <- extendedHeaderToPairs entries
                          ])
 
 putHeader :: Entry -> LBS.ByteString
@@ -119,12 +119,21 @@ putHeaderNoChkSum Entry {
     , putBString 155 $ prefix
     , fill        12 $ '\NUL'
     ]
+  PaxFormat -> concat
+    [ putBString   8 $ ustarMagic
+    , putString   32 $ ownerName ownership
+    , putString   32 $ groupName ownership
+    , putOct       8 $ deviceMajor
+    , putOct       8 $ deviceMinor
+    , putBString 155 $ prefix
+    , fill        12 $ '\NUL'
+    ]
   where
     (typeCode, contentSize, linkTarget,
      deviceMajor, deviceMinor) = case content of
        NormalFile      _ size            -> ('0' , size, mempty, 0,     0)
        -- extended headers are handled separately
-       ExtendedHeader  _                 -> ('x' , 0,    mempty, 0,     0)
+       LocalExtendedHeader  _            -> ('x' , 0,    mempty, 0,     0)
        GlobalExtendedHeader _            -> ('g' , 0,    mempty, 0,     0)
        Directory                         -> ('5' , 0,    mempty, 0,     0)
        SymbolicLink    (LinkTarget link) -> ('2' , 0,    link,   0,     0)

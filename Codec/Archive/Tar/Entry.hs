@@ -74,6 +74,9 @@ module Codec.Archive.Tar.Entry (
   fromLinkTargetToPosixPath,
   fromLinkTargetToWindowsPath,
 
+  -- * ExtendedHeader type
+  ExtendedHeader(..)
+
   ) where
 
 import Codec.Archive.Tar.Types
